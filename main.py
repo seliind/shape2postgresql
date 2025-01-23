@@ -4,11 +4,12 @@ import requests
 import geopandas as gpd
 from sqlalchemy import create_engine
 import psycopg2
+from datetime import datetime
 
 # PostgreSQL bağlantı ayarları
 DB_HOST = "127.0.0.1"
 DB_PORT = "5432"
-DB_NAME = "testcode"
+DB_NAME = "testcode4"
 DB_USER = "postgres"
 DB_PASSWORD = "1234"
 
@@ -20,7 +21,7 @@ shapefile_folder = "downloaded_shapefiles"
 zip_file_path = os.path.join(shapefile_folder, "turkey-latest-free.shp.zip")
 
 # Zip dosyasını indirme işlemi
-print("Zip dosyası indiriliyor...")
+print("Zip dosyası indiriliyor lütfen bekleyiniz...")
 response = requests.get(zip_url)
 with open(zip_file_path, "wb") as file:
     file.write(response.content)
@@ -34,19 +35,38 @@ with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
     zip_ref.extractall(shapefile_folder)
     print("Zip dosyası çıkarıldı.")
 
-# PostgreSQL connection engine
+# Shapefile dosyalarının listesini otomatik oluşturma
+layers = []
+for file_name in os.listdir(shapefile_folder):
+    if file_name.endswith(".shp"):
+        if "gis_osm_" in file_name:
+            layer_base_name = file_name.replace("gis_osm_", "").split("_free_1")[0] 
+            layers.append(layer_base_name)
+
+print(f"Bulunan katmanlar: {layers}")
+
+# PostgreSQL bağlantı engine
 connection_string = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 engine = create_engine(connection_string)
 
-# Çıkarılan shapefile'lar ile işlem yapma
-layers = [
-    "natural"
-    # "buildings", "landuse", "places", "pofw", "pois", "railways",
-    # "road", "traffic", "transport", "water", "waterways", "building"
-]
-
+def log_osm_update(status, message):
+    """Logs the status and message to the osm_log table."""
+    try:
+        # Connect to the PostgreSQL database and insert log entry
+        with psycopg2.connect(
+            host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD
+        ) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO osm_log (log_date, status, message)
+                    VALUES (%s, %s, %s);
+                """, (datetime.now(), status, message))
+                conn.commit()
+    except Exception as e:
+        print(f"Log kaydı yapılamadı: {e}")
+# Katmanları işle
 for layer_name in layers:
-    shapefile_path = os.path.join(shapefile_folder, f"gis_osm_{layer_name}_a_free_1.shp")
+    shapefile_path = os.path.join(shapefile_folder, f"gis_osm_{layer_name}_free_1.shp") 
     
     if os.path.exists(shapefile_path):
         print(f"{layer_name} katmanı işleniyor...")
@@ -68,9 +88,12 @@ for layer_name in layers:
                     subset_gdf = gdf[gdf["fclass"] == fclass_value]
                     
                     # Tablo adını oluştur (ör: water_<fclass>)
+                    if layer_name.endswith("_a"):
+                        layer_name = layer_name.rstrip("_a")
+                        
                     fclass_table_name = f"{layer_name}_{fclass_value}".replace("-", "_").replace(" ", "_")
                     
-                    # Tabloyu silme işlemi (varsa)
+                    # Varsa mevcut tabloyu sil
                     with psycopg2.connect(
                         host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD
                     ) as conn:
@@ -79,7 +102,6 @@ for layer_name in layers:
                                 DROP TABLE IF EXISTS public.{fclass_table_name};
                             """)
                             conn.commit()
-                            print(f"{fclass_table_name} tablosu silindi.")
                     
                     # PostgreSQL'e kaydet (yeni tablonun oluşturulması)
                     subset_gdf.to_postgis(
@@ -89,7 +111,7 @@ for layer_name in layers:
                         index=False
                     )
                     
-                    # `gid` sütununu ekle ve birincil anahtar yap
+                    # primary key ekle
                     with psycopg2.connect(
                         host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD
                     ) as conn:
@@ -112,14 +134,19 @@ for layer_name in layers:
                             """)
                             conn.commit()
                     
-                    print(f"{fclass_table_name} tablosu başarıyla oluşturuldu, gid sütunu eklendi, fclass sütunu silindi ve geometry kolonu geom olarak adlandırıldı.")
+                    print(f"Yeni {fclass_table_name} tablosu başarıyla oluşturuldu.")
             else:
                 print(f"{layer_name} katmanında 'fclass' sütunu bulunamadı, orijinal tablo kaydediliyor.")
                 gdf.to_postgis(name=layer_name, con=engine, if_exists="replace", index=False)
+                log_osm_update("Error", f"{layer_name} katmanında 'fclass' sütunu bulunamadı, orijinal tablo kaydedildi.")
                 
         except Exception as e:
             print(f"{layer_name} katmanı yüklenirken bir hata oluştu: {e}")
+            log_osm_update("Error", f"{layer_name} katmanı yüklenirken bir hata oluştu: {e}")
     else:
         print(f"{layer_name}.shp bulunamadı.")
+        log_osm_update("Error", f"{layer_name}.shp bulunamadı.")
 
-print("Tüm katmanlar işleme tamamlandı.")
+
+log_osm_update("Success", "Tablolar başarıyla güncellendi.")
+print("Tüm katmanlar işlemleri tamamlandı. Teşekkürler!")
