@@ -5,20 +5,25 @@ import geopandas as gpd
 from sqlalchemy import create_engine
 import psycopg2
 from datetime import datetime
+from pathlib import Path
+
 
 # PostgreSQL bağlantı ayarları
 DB_HOST = "127.0.0.1"
 DB_PORT = "5432"
-DB_NAME = "testcode4"
+DB_NAME = "testcode5"
 DB_USER = "postgres"
 DB_PASSWORD = "1234"
 
 # İndirme linki ve zip dosyasının çıkarılacağı klasör
 zip_url = "https://download.geofabrik.de/europe/turkey-latest-free.shp.zip"
-shapefile_folder = "downloaded_shapefiles"
+shapefile_folder = Path("downloaded_shapefiles")
 
 # Zip dosyasını indir
-zip_file_path = os.path.join(shapefile_folder, "turkey-latest-free.shp.zip")
+zip_file_path = shapefile_folder / "turkey-latest-free.shp.zip"
+
+
+shapefile_folder.mkdir(parents=True, exist_ok=True)
 
 # Zip dosyasını indirme işlemi
 print("Zip dosyası indiriliyor lütfen bekleyiniz...")
@@ -26,10 +31,6 @@ response = requests.get(zip_url)
 with open(zip_file_path, "wb") as file:
     file.write(response.content)
 print("Zip dosyası başarıyla indirildi.")
-
-# Zip dosyasını çıkarma
-if not os.path.exists(shapefile_folder):
-    os.makedirs(shapefile_folder)
 
 with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
     zip_ref.extractall(shapefile_folder)
